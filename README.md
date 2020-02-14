@@ -10,3 +10,5 @@ PyCollada - https://github.com/pycollada/pycollada
 PyNrrd - https://github.com/mhe/pynrrd
 
 PyMCubes - https://github.com/pmneila/PyMCubes
+
+Skeletonization depends on Kimimaro - https://github.com/seung-lab/kimimaro
