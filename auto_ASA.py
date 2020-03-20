@@ -2,10 +2,12 @@ import numpy as np
 import math
 import nrrd
 from scipy import ndimage
+from scipy.ndimage import zoom
 import mcubes
 import glob
 import sys
 import os
+import code
 
 
 def main(cell_nrrd_file, terminal_nrrd_file):
@@ -23,6 +25,22 @@ def main(cell_nrrd_file, terminal_nrrd_file):
     x_spacing_2, y_spacing_2, z_spacing_2 = header_2['spacings']
     x_min_2, y_min_2, z_min_2 = header_2['axis mins']
     x_len_2, y_len_2, z_len_2 = header_2['sizes']
+    print("cell body: " + str(header_1['spacings']))
+    print("terminal: " + str(header_2['spacings']))
+
+    if x_spacing_1 != 1:
+        scale_factor = x_spacing_1
+        print("Resampling cell body by factor of " + str(scale_factor))
+        cell_body = change_bin(scale_factor, cell_body)
+        x_spacing_1, y_spacing_1, z_spacing_1 = 1.0, 1.0, 5.4545
+        x_len_1, y_len_1, z_len_1 = x_len_1*scale_factor, y_len_1*scale_factor, z_len_1*scale_factor
+    if x_spacing_2 != 1:
+        scale_factor = x_spacing_2
+        print("Resampling terminal by factor of " + str(scale_factor))
+        terminal = change_bin(scale_factor, terminal, z_min=_int(z_min_1), z_max=int(z_min_1+z_len_1*z_spacing_1))
+        x_spacing_2, y_spacing_2, z_spacing_2 = 1.0, 1.0, 5.4545
+        x_len_2, y_len_2 = x_len_2*scale_factor, y_len_2*scale_factor
+        z_len_2 = z_len_1
 
     # if the dimensions are not the same then we resample the terminal
     if x_spacing_1 != x_spacing_2 or x_min_1 != x_min_2 or y_min_1 != y_min_2 \
@@ -34,6 +52,7 @@ def main(cell_nrrd_file, terminal_nrrd_file):
         delta_z = int((z_min_1 - z_min_2) / z_spacing_1)
 
         print("resampling terminal file...")
+
         new_terminal = np.zeros((x_len_1, y_len_1, z_len_1))
 
         for x in range(x_len_1):
@@ -47,9 +66,11 @@ def main(cell_nrrd_file, terminal_nrrd_file):
 
                                 new_terminal[x][y][z] = terminal[x+delta_x][y+delta_y][z+delta_z]
 
-        # should be able to resample the terminal based in indexing, looping is inefficient
-        # new_terminal[:int(x_max_2-x_min_1)][:int(y_max_2-y_min_1)][:int(z_max_2-z_min_2)] =
-        # terminal[delta_x:][delta_y:][delta_z:]
+        """
+        if delta_x > 0 and delta_y > 0 and delta_z > 0:
+            new_terminal[0:x_len_2-delta_x][0:y_len_2-delta_y][0:y_len_2-delta_y] = 
+            terminal[delta_x:x_len_2][delta_y:y_len_2][delta_z:z_len_2]
+        """
 
     else:
         new_terminal = terminal
@@ -59,7 +80,7 @@ def main(cell_nrrd_file, terminal_nrrd_file):
 
     print("performing boolean operators...")
     # Remove any part of the cell body that overlaps with the terminal
-    # This is to correct for imperfect segmentations, the terminals are typically
+    # This is to correct for imperfect segmentation, the terminals are typically
     # traced more accurately
     bool_remove_cell = boolean_remove(cell_body, new_terminal)
 
@@ -70,7 +91,7 @@ def main(cell_nrrd_file, terminal_nrrd_file):
         dilated_cell[:][:][z] = ndimage.binary_dilation(dilated_cell[:][:][z], iterations=3).astype(terminal.dtype)
 
     # dilate the cell body to create overlap
-    dilated_cell = ndimage.binary_dilation(bool_remove_cell, iterations=3).astype(int)
+    dilated_cell = ndimage.binary_dilation(dilated_cell, iterations=3).astype(int)
 
     # grab the overlapping area
     asa_matrix = boolean_and(dilated_cell, new_terminal)
@@ -105,6 +126,30 @@ def boolean_or(data_1, data_2):
 
     return(np.logical_or(data_1, data_2))
 
+
+def change_bin(scale_factor, data, z_min = 0, z_max=2200):
+
+    data = data.astype(bool)
+    slices = []
+    #Downsample in x and y by given scale_factor
+    if z_min == 0 and z_max == 2200:
+        for z_slice in range(data.shape[2]):
+            current_slice = data[:, :, z_slice]
+            zoomed = zoom(current_slice, (scale_factor, scale_factor))
+            slices.append(zoomed)
+    else:
+        for z_slice in range(z_min, z_max):
+            current_slice = data[:, :, z_slice]
+            zoomed = zoom(current_slice, (scale_factor, scale_factor))
+            slices.append(zoomed)
+
+    # cast list of downsampled slices in np array
+    new_data = np.asarray(slices)
+    #reshuffle array to get back to original order of axes
+    new_data = np.swapaxes(new_data, 0, 2)
+    new_data = np.swapaxes(new_data, 0, 1)
+
+    return(new_data)
 
 def calculate_surface_area(verts, faces):
     surface_area = 0.0
@@ -153,15 +198,17 @@ def calculate_surface_area(verts, faces):
 
 if __name__ == "__main__":
 
-    if len(sys.argv) > 1:
-        cell_file = sys.argv[1]
+    if len(sys.argv) == 3:
+        cell_body = sys.argv[1]
 
-        for input_file in glob.glob("*.nrrd"):
-            print(input_file)
-
-            if input_file != cell_file:
-                main(cell_file, input_file)
-
+        if os.path.isdir(sys.argv[2]):
+            for in_file in glob.glob(os.path.join(sys.argv[2], "*.nrrd")):
+                if in_file == cell_body:
+                    continue
+                print(in_file)
+                main(cell_body, in_file)
+        else:
+            main(cell_body, sys.argv[2])
     else:
-        print('auto_ASA.py takes in one argument: the cell body name (or just the object being contacted)')
-        print('all files need to be in the same directory as the script and cell file')
+        print('auto_ASA takes in two arguments: 1- the cell body nrrd file 2- a file or folder containing the inputs')
+
